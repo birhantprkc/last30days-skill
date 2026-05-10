@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `LAST30DAYS_YT_SSH_HOST` env var: when set, yt-dlp YouTube search invocations are routed through `ssh <host>` for residential-IP egress. Bypasses YouTube's bot-wall on datacenter IPs (Hetzner/DigitalOcean/AWS) where `ytsearch:` returns 0 results regardless of cookies (the IP fingerprint is checked first). The named host must be configured in `~/.ssh/config` and have yt-dlp installed. The transcript path is unchanged (uses the existing HTTP fallback when SSH-routing is on, since the timedtext API isn't bot-walled).
+
 ### Changed
 
 - Replace the SKILL_ROOT resolver loops in Step 1 and comparison-mode with a single `SKILL_DIR` substitution pattern. The model templates the absolute path of the SKILL.md's own directory (which it always knows from the Read tool result); the bash block just validates that `scripts/last30days.py` lives there. Removes ~80 lines of bash across the two locations. Fixes a real bug: the previous resolver could pick a different install than the SKILL.md the model loaded from (spec-vs-engine divergence) and didn't enumerate harnesses like Hermes at all. The simplification works for any harness without enumeration because it just uses wherever SKILL.md was loaded from. STEP 0's marketplaces-stale-clone hop is unchanged.
