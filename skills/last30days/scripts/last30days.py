@@ -541,6 +541,13 @@ def main() -> int:
 
     config = env.get_config()
 
+    # Surface SSH-routing config as an env var so library modules (e.g.
+    # youtube_yt) can read it without taking a config dependency. This
+    # routes yt-dlp through `ssh <host>` to bypass YouTube's bot-wall on
+    # datacenter IPs (see lib/youtube_yt.py for details).
+    if config.get("LAST30DAYS_YOUTUBE_SSH_HOST") and "LAST30DAYS_YOUTUBE_SSH_HOST" not in os.environ:
+        os.environ["LAST30DAYS_YOUTUBE_SSH_HOST"] = config["LAST30DAYS_YOUTUBE_SSH_HOST"]
+
     # Handle setup subcommand
     topic = " ".join(args.topic).strip()
     if topic.lower() == "setup":

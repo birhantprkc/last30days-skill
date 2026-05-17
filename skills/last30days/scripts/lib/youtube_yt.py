@@ -8,7 +8,9 @@ Inspired by Peter Steinberger's toolchain approach (yt-dlp + summarize CLI).
 
 import json
 import math
+import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -96,8 +98,74 @@ def _log(msg: str):
 
 
 def is_ytdlp_installed() -> bool:
-    """Check if yt-dlp is available in PATH."""
+    """Check if yt-dlp is available locally, or if SSH routing is configured.
+
+    When LAST30DAYS_YOUTUBE_SSH_HOST is set, returns True without a local check —
+    yt-dlp lives on the remote host. Failures surface naturally on first use.
+    """
+    if _ytdlp_ssh_host():
+        return True
     return shutil.which("yt-dlp") is not None
+
+
+# Host aliases must be plain hostnames / SSH config aliases — no flags, no
+# shell metacharacters. Rejects any value that could be reinterpreted by ssh
+# (or the surrounding shell) as something other than a destination.
+_SSH_HOST_ALIAS_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
+
+
+def _ytdlp_ssh_host() -> Optional[str]:
+    """Return SSH host alias if yt-dlp should be routed via SSH, else None.
+
+    Set LAST30DAYS_YOUTUBE_SSH_HOST=<ssh-alias> (e.g. 'macmini') in the environment
+    to route yt-dlp through SSH for residential IP egress. This bypasses
+    YouTube's bot-wall on datacenter IPs (Hetzner, DigitalOcean, AWS, etc.)
+    where ytsearch returns 0 results regardless of cookies.
+
+    The remote host must have yt-dlp installed and reachable via the named
+    SSH alias (configured in ~/.ssh/config). On macOS hosts with Homebrew,
+    add brew shellenv to ~/.zshenv (not just ~/.zprofile) so non-login SSH
+    shells find yt-dlp on PATH.
+
+    Validation: host value must match ``[A-Za-z0-9._-]+``. Anything starting
+    with ``-`` or containing shell/SSH metacharacters is rejected with a
+    stderr warning and treated as unset, so a misconfigured or attacker-
+    controlled value can't slip through as an SSH option flag or proxy command.
+    The ``--`` option terminator in ``_wrap_ytdlp_cmd`` is a second line of
+    defense; this regex closes the door on the env var ever reaching ssh
+    in the first place.
+
+    To use a value from ~/.config/last30days/.env, export it into the
+    environment before invoking the engine, e.g. in a wrapper:
+        set -a; source ~/.config/last30days/.env; set +a
+        python3 last30days.py "..."
+    """
+    host = os.environ.get("LAST30DAYS_YOUTUBE_SSH_HOST", "").strip()
+    if not host:
+        return None
+    if not _SSH_HOST_ALIAS_RE.match(host):
+        sys.stderr.write(
+            f"[youtube_yt] WARNING: LAST30DAYS_YOUTUBE_SSH_HOST={host!r} "
+            "does not look like a plain hostname/alias; ignoring. "
+            "Expected pattern: letters, digits, dot, underscore, hyphen.\n"
+        )
+        return None
+    return host
+
+
+def _wrap_ytdlp_cmd(cmd: List[str]) -> List[str]:
+    """Wrap a yt-dlp command list with `ssh <host>` when SSH routing is set.
+
+    Args are shell-quoted to survive the remote shell. Uses BatchMode=yes so
+    a misconfigured key fails fast instead of hanging on a password prompt.
+    The `--` option terminator prevents an SSH option-injection if
+    LAST30DAYS_YOUTUBE_SSH_HOST were ever set to a value starting with `-`.
+    """
+    host = _ytdlp_ssh_host()
+    if not host:
+        return cmd
+    remote_cmd = " ".join(shlex.quote(a) for a in cmd)
+    return ["ssh", "-o", "BatchMode=yes", "--", host, remote_cmd]
 
 
 def _extract_core_subject(topic: str) -> str:
@@ -223,6 +291,7 @@ def search_youtube(
         "--no-warnings",
         "--no-download",
     ]
+    cmd = _wrap_ytdlp_cmd(cmd)
 
     try:
         result = subproc.run_with_timeout(cmd, timeout=120)
@@ -472,13 +541,22 @@ def fetch_transcript(video_id: str, temp_dir: str) -> Optional[str]:
         Plaintext transcript string, or None if no captions available.
     """
     raw_vtt = None
-    if is_ytdlp_installed():
+    # When SSH-routing is on, the yt-dlp transcript path would write a VTT
+    # file on the remote host that we can't easily read back. Skip it and
+    # use the HTTP transcript fallback (different YouTube endpoint, less
+    # bot-walled, works fine from datacenter IPs).
+    ssh_host = _ytdlp_ssh_host()
+    use_ytdlp = is_ytdlp_installed() and not ssh_host
+    if use_ytdlp:
         raw_vtt = _fetch_transcript_ytdlp(video_id, temp_dir)
         if not raw_vtt:
             _log(f"yt-dlp transcript failed for {video_id}, trying direct HTTP fallback")
             raw_vtt = _fetch_transcript_direct(video_id)
     else:
-        _log("yt-dlp not installed, using direct HTTP transcript fetch")
+        if ssh_host:
+            _log("SSH-routing active, using direct HTTP transcript fetch")
+        else:
+            _log("yt-dlp not installed, using direct HTTP transcript fetch")
         raw_vtt = _fetch_transcript_direct(video_id)
 
     if not raw_vtt:

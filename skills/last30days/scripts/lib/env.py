@@ -329,6 +329,7 @@ def get_config() -> dict[str, Any]:
         ('SETUP_COMPLETE', None),
         ('INCLUDE_SOURCES', ''),
         ('EXCLUDE_SOURCES', ''),
+        ('LAST30DAYS_YOUTUBE_SSH_HOST', None),
     ]
 
     for key, default in keys:
