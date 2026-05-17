@@ -232,9 +232,20 @@ def web_search(
         raise ValueError(f"Unsupported web backend: {backend!r}")
     else:
         return [], {}
-    if items:
+    if items and not _reddit_excluded(config):
         items = _enrich_reddit_items(items)
     return items, artifact
+
+
+def _reddit_excluded(config: dict) -> bool:
+    """Return True when EXCLUDE_SOURCES contains 'reddit'.
+
+    Respects the same suppression knob the pipeline uses for source gating,
+    so a user who set EXCLUDE_SOURCES=reddit doesn't get Reddit content
+    smuggled back in via web-search URLs.
+    """
+    raw = (config.get("EXCLUDE_SOURCES") or "").split(",")
+    return any(s.strip().lower() == "reddit" for s in raw)
 
 
 def _enrich_reddit_items(items: list[dict]) -> list[dict]:
@@ -243,6 +254,10 @@ def _enrich_reddit_items(items: list[dict]) -> list[dict]:
     Claude Code's WebFetch blocks reddit.com, so the model can't retrieve
     Reddit content from web search results. This fetches it via the public
     JSON API (reddit.com/.../.json) which bypasses that restriction.
+
+    Callers should gate this with EXCLUDE_SOURCES=reddit handling (see
+    `_reddit_excluded`) so a user who explicitly excluded Reddit doesn't
+    get Reddit content via web-search URLs.
     """
     from . import reddit_enrich
 

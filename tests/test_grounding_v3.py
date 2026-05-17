@@ -190,5 +190,42 @@ class WebSearchDispatchTests(unittest.TestCase):
             grounding.web_search("test", ("2026-02-25", "2026-03-27"), {}, backend="google")
 
 
+class RedditEnrichmentGateTests(unittest.TestCase):
+    """EXCLUDE_SOURCES=reddit must suppress the web-search Reddit enrichment.
+
+    Otherwise a user who explicitly excluded Reddit would still get Reddit
+    content smuggled back in via web-search URLs that happen to point at
+    reddit.com threads.
+    """
+
+    def test_reddit_excluded_via_exclude_sources_skips_enrichment(self):
+        config = {"BRAVE_API_KEY": "k", "EXCLUDE_SOURCES": "reddit"}
+        items = [{"url": "https://www.reddit.com/r/python/comments/abc/title/", "snippet": "original"}]
+        with patch("lib.grounding.brave_search", return_value=(items, {})), \
+             patch("lib.grounding._enrich_reddit_items") as enrich_mock:
+            grounding.web_search("test", ("2026-02-25", "2026-03-27"), config, backend="auto")
+            enrich_mock.assert_not_called()
+
+    def test_reddit_excluded_case_insensitive(self):
+        for value in ("REDDIT", "Reddit", " reddit ", "x,reddit,y"):
+            config = {"BRAVE_API_KEY": "k", "EXCLUDE_SOURCES": value}
+            self.assertTrue(
+                grounding._reddit_excluded(config),
+                msg=f"_reddit_excluded should be True for EXCLUDE_SOURCES={value!r}",
+            )
+
+    def test_reddit_not_excluded_when_other_sources_listed(self):
+        config = {"EXCLUDE_SOURCES": "tiktok,instagram"}
+        self.assertFalse(grounding._reddit_excluded(config))
+
+    def test_enrichment_runs_when_reddit_not_excluded(self):
+        config = {"BRAVE_API_KEY": "k"}
+        items = [{"url": "https://www.reddit.com/r/python/comments/abc/title/", "snippet": "original"}]
+        with patch("lib.grounding.brave_search", return_value=(items, {})), \
+             patch("lib.grounding._enrich_reddit_items", return_value=items) as enrich_mock:
+            grounding.web_search("test", ("2026-02-25", "2026-03-27"), config, backend="auto")
+            enrich_mock.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
