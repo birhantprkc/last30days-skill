@@ -1,16 +1,16 @@
 # Save shareable HTML brief
 
-This reference file is loaded by the main `SKILL.md` when the user asked for an HTML brief (either explicitly via `--emit=html` / `--emit:html` / `--html`, or in natural language - "give me a shareable HTML brief", "for Slack", "for Notion", "export as HTML", etc.). The detection happens in `SKILL.md` so that the common no-HTML path stays short; the implementation lives here.
+This reference file is loaded by the main `SKILL.md` when the user asked for an HTML brief (either through an HTML-looking prompt argument like `--emit=html` / `--emit:html` / `--html`, or in natural language - "give me a shareable HTML brief", "give it to me in HTML", "for Slack", "for Notion", "export as HTML", etc.). The detection happens in `SKILL.md` so that the common no-HTML path stays short; the implementation lives here. Those prompt arguments are user intent signals for the skill; they are not the full Python CLI contract.
 
 The contract has two modes:
 
-- **Explicit HTML export** (`--emit=html`, `--emit:html`, or `--html`): the HTML artifact is the primary output. Write the synthesis to the temp file, render the HTML, then give a concise artifact handoff in chat instead of pasting the full Markdown report again.
-- **Normal report plus HTML copy** (the user asks in prose for an HTML brief while also expecting the report in chat): the synthesis still appears in chat as the primary output. The HTML is an additional artifact saved to disk for sharing. Both happen in the same turn.
+- **HTML as the requested deliverable** (`--emit=html`, `--emit:html`, `--html`, or prose like "give it to me in HTML"): the HTML artifact is the primary output. Write the synthesis to the temp file, render the HTML, then give a concise artifact handoff in chat instead of pasting the full Markdown report again.
+- **Normal report plus HTML copy** (the user asks for the normal report and also wants an HTML copy): the synthesis still appears in chat as the primary output. The HTML is an additional artifact saved to disk for sharing. Both happen in the same turn.
 
 ## When to fire this flow
 
 - For normal-report-plus-HTML mode: after you have already emitted the full chat response: badge, "What I learned:" (or comparison title), bold-lead-in paragraphs with citations, KEY PATTERNS list, engine footer pass-through, invitation block.
-- For explicit-HTML-export mode: after you have drafted the synthesis that will go into the HTML, before emitting the final chat response.
+- For HTML-as-deliverable mode: after you have drafted the synthesis that will go into the HTML, before emitting the final chat response.
 - BEFORE the WAIT FOR USER'S RESPONSE pause.
 - ONLY if the user asked. Do NOT save HTML when the user didn't ask for it.
 
@@ -78,9 +78,9 @@ printf '📎 Shareable brief saved to %s\n' "$HTML_PATH"
 
 Use the mode that matches the request.
 
-### Explicit HTML export
+### HTML as the requested deliverable
 
-When the user explicitly supplied `--emit=html`, `--emit:html`, or `--html`, do **not** paste the full Markdown report back into chat after saving the artifact. The user asked for a file; repeating the Markdown makes the run feel like a normal report with an attachment bolted on.
+When HTML is the requested deliverable - whether by `--emit=html`, `--emit:html`, `--html`, or natural-language phrasing - do **not** paste the full Markdown report back into chat after saving the artifact. The user asked for an HTML deliverable; repeating the Markdown makes the run feel like a normal report with an attachment bolted on.
 
 Respond with a concise handoff:
 
@@ -89,15 +89,10 @@ Respond with a concise handoff:
 
 📎 Shareable brief saved to <absolute HTML path>
 
-Open it locally:
-- macOS: `open "<absolute HTML path>"`
-- Linux: `xdg-open "<absolute HTML path>"`
-- Windows: `start "" "<absolute HTML path>"`
-
 I saved the full HTML brief locally. It is not uploaded or published anywhere.
 ```
 
-If the host can safely open local files for the user and doing so matches the user's request, run the local open command after the file is written, leave the saved-path line in chat, and add `Opened locally.` If the command fails or the host is headless, do not treat that as a failed report; show the path and manual open command.
+If the host can safely open local files for the user and doing so matches the user's request, open the HTML file after it is written, leave the saved-path line in chat, and add `Opened locally.` Let the host choose the correct OS-specific mechanism; do not print a menu of shell commands. If opening fails or the host is headless, do not treat that as a failed report; show the path and say the file is ready to open in a browser.
 
 ### Normal report plus HTML copy
 
@@ -105,14 +100,9 @@ When the user asked for a normal `/last30days` report and also asked for an HTML
 
 ```text
 📎 Shareable brief saved to <absolute HTML path>
-
-Open it locally:
-- macOS: `open "<absolute HTML path>"`
-- Linux: `xdg-open "<absolute HTML path>"`
-- Windows: `start "" "<absolute HTML path>"`
 ```
 
-Do not offer public publishing or upload in this flow. Hosted sharing is a separate opt-in capability and must not happen automatically.
+If the host can safely open local files, open it for the user when that matches the request; otherwise the saved-path line is enough. Do not offer public publishing or upload in this flow. Hosted sharing is a separate opt-in capability and must not happen automatically.
 
 ## What ends up in the HTML file
 

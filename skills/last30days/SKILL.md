@@ -1842,10 +1842,10 @@ Close with `I have all the links to the {N} {source list} I pulled from. Just as
 
 ## SHAREABLE HTML BRIEF (when the user asked for one)
 
-**This section fires if EITHER trigger is true:**
+**This section fires if EITHER prompt-level trigger is true:**
 
-- `$ARGUMENTS` contains `--emit=html`, `--emit:html`, or `--html` as a flag
-- The user's natural-language request asks for an HTML brief, shareable doc, or file for sharing (Slack, email, Notion, "export as HTML", etc). Use your judgment for phrasing variants.
+- The user included an HTML-looking argument such as `--emit=html`, `--emit:html`, or `--html` in the skill prompt. Treat this as a strong user intent signal for HTML; do not confuse it with the complete Python CLI contract.
+- The user's natural-language request asks for an HTML brief, shareable doc, or file for sharing (Slack, email, Notion, "give it to me in HTML", "export as HTML", etc). Use your judgment for phrasing variants; a literal flag is not required.
 
 **If neither trigger fires, skip this entire section and proceed to WAIT FOR USER'S RESPONSE.** No HTML save flow, no reference read needed.
 
@@ -1853,7 +1853,7 @@ Close with `I have all the links to the {N} {source list} I pulled from. Just as
 
 - Read `references/save-html-brief.md` BEFORE proceeding to WAIT FOR USER'S RESPONSE
 - Follow that file's instructions exactly - it is the canonical source for the save flow
-- End with the artifact handoff defined there: saved HTML path, local open/view affordance when available, and a concise confirmation for explicit `--emit=html` / `--html` requests
+- End with the artifact handoff defined there: saved HTML path, open the local file when the host can do so, and a concise confirmation for requests where HTML is the requested deliverable
 
 **You MUST NOT:**
 

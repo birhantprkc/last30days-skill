@@ -15,28 +15,29 @@ def test_skill_routes_html_to_reference_and_artifact_handoff():
 
     assert "Read `references/save-html-brief.md`" in section
     assert "artifact handoff" in section
-    assert "local open/view affordance" in section
+    assert "open the local file when the host can do so" in section
     assert "Upload or publish" in section
     assert "Append the confirmation line" not in section
+    assert "a literal flag is not required" in section
+    assert "do not confuse it with the complete Python CLI contract" in section
 
 
-def test_explicit_html_export_is_artifact_first_not_full_markdown_repeat():
+def test_html_deliverable_is_artifact_first_not_full_markdown_repeat():
     text = SAVE_HTML.read_text(encoding="utf-8")
-    assert "**Explicit HTML export**" in text
+    assert "**HTML as the requested deliverable**" in text
+    assert 'prose like "give it to me in HTML"' in text
     assert "the HTML artifact is the primary output" in text
     assert "do **not** paste the full Markdown report back into chat" in text
-    assert "The user asked for a file" in text
+    assert "The user asked for an HTML deliverable" in text
 
 
-def test_html_handoff_includes_local_open_commands_without_requiring_success():
+def test_html_handoff_opens_locally_without_os_command_menu():
     text = SAVE_HTML.read_text(encoding="utf-8")
-    for snippet in [
-        'open "<absolute HTML path>"',
-        'xdg-open "<absolute HTML path>"',
-        'start "" "<absolute HTML path>"',
-        "If the command fails or the host is headless",
-    ]:
-        assert snippet in text
+    assert "Let the host choose the correct OS-specific mechanism" in text
+    assert "do not print a menu of shell commands" in text
+    assert "If opening fails or the host is headless" in text
+    assert 'xdg-open "<absolute HTML path>"' not in text
+    assert 'start "" "<absolute HTML path>"' not in text
 
 
 def test_html_save_flow_does_not_publish_or_upload():
