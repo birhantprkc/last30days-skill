@@ -62,9 +62,14 @@ def test_parse_keychain_aliases_accepts_ordered_fallback_list():
     }
 
 
-def test_parse_keychain_aliases_ignores_invalid_json_and_unknown_keys():
+def test_parse_keychain_aliases_warns_on_invalid_json_and_ignores_unknown_keys(capsys):
     assert env._parse_keychain_aliases("not json") == {}
+    warning = capsys.readouterr().err
+    assert "LAST30DAYS_KEYCHAIN_ALIASES is not valid JSON" in warning
+    assert "canonical lookups enabled" in warning
+
     assert env._parse_keychain_aliases('{"NOT_A_KEY":"secret-service"}') == {}
+    assert capsys.readouterr().err == ""
 
 
 def test_load_keychain_loads_present_keys_skips_missing():

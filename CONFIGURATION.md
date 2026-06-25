@@ -217,6 +217,10 @@ The alias value contains no secret material; it is safe to keep in `.env` as
 configuration. The secret itself remains in its original Keychain item and is
 read directly by the engine process.
 
+Write `LAST30DAYS_KEYCHAIN_ALIASES` as a single-line JSON value in `.env`.
+Multiline JSON formatting is not supported because `.env` files are parsed
+line-by-line.
+
 ### Bluesky app-password format and search host
 
 `BSKY_APP_PASSWORD` should be a 19-char app password in `xxxx-xxxx-xxxx-xxxx` format (lowercase alphanumeric, three hyphens). Generate one at <https://bsky.app/settings/app-passwords>. The AT Protocol's `createSession` endpoint also accepts your main account login password, but that's bad hygiene — main passwords have no scope (an app password can be limited to non-DM access) and can't be revoked individually.

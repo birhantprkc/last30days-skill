@@ -136,14 +136,19 @@ def _parse_keychain_aliases(raw: str | None) -> dict[str, list[dict[str, str]]]:
       {"XAI_API_KEY": {"service": "existing-xai-api-key", "account": "keychain-user"}}
       {"XAI_API_KEY": [{"service": "primary"}, {"service": "fallback"}]}
 
-    Invalid entries are ignored silently so a typo never blocks canonical
-    `last30days-<KEY>` lookups.
+    Invalid entries are ignored so a typo never blocks canonical
+    `last30days-<KEY>` lookups; malformed JSON emits a warning.
     """
     if not raw:
         return {}
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        sys.stderr.write(
+            f"[last30days] WARNING: {KEYCHAIN_ALIASES_ENV} is not valid JSON; "
+            f"ignoring Keychain aliases while keeping canonical lookups enabled: {exc}\n"
+        )
+        sys.stderr.flush()
         return {}
     if not isinstance(parsed, dict):
         return {}
