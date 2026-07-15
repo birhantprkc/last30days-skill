@@ -875,6 +875,47 @@ class FourStateAudit(unittest.TestCase):
         self.assertIn("13 items last run", text)
 
 
+class BackupAndCommentLanes(unittest.TestCase):
+    """U7: backup + comment sub-lanes render on their parent source."""
+
+    def test_backups_armed_with_sc_key(self):
+        report = _build({"SCRAPECREATORS_API_KEY": "dummy-sc-secret-000"})
+        self.assertTrue(report["sources"]["reddit"]["backups"][0]["armed"])
+        yt_backup = report["sources"]["youtube"]["backups"][0]
+        self.assertTrue(yt_backup["armed"])
+        self.assertIn("rate-limited", yt_backup["note"])
+        text = doctor.render_text(report)
+        self.assertIn("backup: ScrapeCreators transcript/search backstop — armed", text)
+
+    def test_backups_off_without_sc_key(self):
+        report = _build({})
+        self.assertFalse(report["sources"]["reddit"]["backups"][0]["armed"])
+        self.assertFalse(report["sources"]["youtube"]["backups"][0]["armed"])
+
+    def test_youtube_comments_reflect_include_sources(self):
+        on = _build(
+            {
+                "SCRAPECREATORS_API_KEY": "dummy-sc-secret-000",
+                "INCLUDE_SOURCES": "tiktok,instagram,youtube_comments",
+            }
+        )
+        self.assertTrue(on["sources"]["youtube"]["comments"]["enabled"])
+        off = _build({"SCRAPECREATORS_API_KEY": "dummy-sc-secret-000"})
+        self.assertFalse(off["sources"]["youtube"]["comments"]["enabled"])
+
+    def test_x_dual_path_note(self):
+        keyed = _build({"XAI_API_KEY": "dummy-xai-secret-000"})
+        note = keyed["sources"]["x"]["backups"][0]["note"]
+        self.assertIn("XAI_API_KEY", note)
+        self.assertTrue(keyed["sources"]["x"]["backups"][0]["armed"])
+
+    def test_sub_lanes_in_json(self):
+        report = _build({"SCRAPECREATORS_API_KEY": "dummy-sc-secret-000"})
+        blob = json.loads(doctor.render_json(report))
+        self.assertIn("backups", blob["sources"]["youtube"])
+        self.assertIn("comments", blob["sources"]["youtube"])
+
+
 class ThreadsOptIn(unittest.TestCase):
     """U6: Threads reports opt-in state honestly against INCLUDE_SOURCES."""
 

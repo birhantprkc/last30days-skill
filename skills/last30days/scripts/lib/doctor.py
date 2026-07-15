@@ -816,6 +816,52 @@ def load_run_evidence(
 
 
 # ---------------------------------------------------------------------------
+# Backup + comment sub-lanes (U7 / R8, R9)
+#
+# Backups (Reddit's SC backfill, YouTube's SC transcript/search backstop, X's
+# cookie-vs-key dual path) and comment lanes (youtube/tiktok/instagram) are not
+# independent sources - they are capabilities of their parent. doctor surfaces
+# them as indented sub-lines so "is a backup armed when yt-dlp is rate-limited?"
+# is answerable at a glance without inventing fake sources.
+# ---------------------------------------------------------------------------
+
+def _sub_lanes_for(source: str, config: Dict[str, Any]):
+    """Return (backups, comments) metadata for a source, or ([], None)."""
+    backups: List[Dict[str, Any]] = []
+    comments: Optional[Dict[str, Any]] = None
+    has_sc = bool(config.get("SCRAPECREATORS_API_KEY"))
+    if source == "reddit":
+        backups.append({
+            "name": "ScrapeCreators backfill", "armed": has_sc,
+            "note": "fills in when the free public path returns nothing",
+        })
+    elif source == "youtube":
+        backups.append({
+            "name": "ScrapeCreators transcript/search backstop", "armed": has_sc,
+            "note": "used when yt-dlp is rate-limited or bot-gated",
+        })
+        comments = {"enabled": bool(env.is_youtube_comments_available(config))}
+    elif source == "x":
+        has_key = bool(config.get("XAI_API_KEY") or config.get("XQUIK_API_KEY"))
+        cookie = bool(env.x_pending_browser_auth(config, local_only=True))
+        if has_key:
+            note = "XAI_API_KEY key-backed path (verified, cookie-free)"
+        elif cookie:
+            note = (
+                "browser-cookie path primary; add XAI_API_KEY for a verified "
+                "cookie-free backup"
+            )
+        else:
+            note = "no auth path armed"
+        backups.append({"name": "X auth path", "armed": has_key or cookie, "note": note})
+    elif source == "tiktok":
+        comments = {"enabled": bool(env.is_tiktok_comments_available(config))}
+    elif source == "instagram":
+        comments = {"enabled": bool(env.is_instagram_comments_available(config))}
+    return backups, comments
+
+
+# ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
 
@@ -906,6 +952,14 @@ def build_report(config: Dict[str, Any]) -> Dict[str, Any]:
             "detail": probe.detail,
             "optional": source in _OPTIONAL_CLI_SOURCES,
         }
+
+    # U7: attach backup + comment sub-lanes to their parent source.
+    for source, record in sources.items():
+        backups, comments = _sub_lanes_for(source, config)
+        if backups:
+            record["backups"] = backups
+        if comments is not None:
+            record["comments"] = comments
 
     # Sequential on purpose: the permission preflight composes pipeline
     # diagnostics and must not race the source builders.
@@ -1003,8 +1057,17 @@ def _audit_source_line(name: str, record: Dict[str, Any], state: str) -> str:
 
 
 def _sub_lane_lines(record: Dict[str, Any]) -> List[str]:
-    """Indented backup/comment sub-lane lines under a source (populated by U7)."""
-    return []
+    """Indented backup/comment sub-lane lines under a source (R8, R9)."""
+    lines: List[str] = []
+    for backup in record.get("backups") or []:
+        state = "armed" if backup.get("armed") else "off"
+        note = f" - {backup['note']}" if backup.get("note") else ""
+        lines.append(f"      backup: {backup['name']} — {state}{note}")
+    comments = record.get("comments")
+    if comments is not None:
+        state = "on" if comments.get("enabled") else "off"
+        lines.append(f"      comments: {state}")
+    return lines
 
 
 def _cli_health_lines(report: Dict[str, Any]) -> List[str]:
