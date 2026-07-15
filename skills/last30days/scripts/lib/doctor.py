@@ -48,6 +48,8 @@ import json
 import os
 import shutil
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -1456,6 +1458,126 @@ def _write_cache(report: Dict[str, Any], config: Dict[str, Any]) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Live probe (U5 / R6)
+#
+# When there is no fresh run to learn from (or on explicit --probe), doctor
+# runs a BOUNDED live test so WORKING is verified, not guessed. Scope is
+# deliberate: free HTTP endpoints + keyless CLIs only. Credit-gated /
+# session-gated sources (x, tiktok, instagram, threads, ...) are NOT
+# live-probed - a health check must never spend ScrapeCreators credits or trip
+# auth rate limits; they stay UNVERIFIED with that noted. Every probe is capped
+# by a per-source deadline so a single slow source (YouTube's 120s search) can
+# never hang doctor.
+# ---------------------------------------------------------------------------
+
+# Free, keyless liveness endpoints (reachability check, tiny payload).
+_HTTP_PROBE_URLS = {
+    "reddit": "https://www.reddit.com/r/all/hot.json?limit=1",
+    "hackernews": "https://hn.algolia.com/api/v1/search?query=test&hitsPerPage=1",
+    "polymarket": "https://gamma-api.polymarket.com/events?limit=1",
+    "github": "https://api.github.com/rate_limit",
+}
+
+DEFAULT_PROBE_TIMEOUT_SECONDS = 10
+
+
+def probe_timeout_seconds(config: Dict[str, Any]) -> int:
+    """Per-source probe deadline; process env > config > default 10s."""
+    raw: Any = os.environ.get("LAST30DAYS_DOCTOR_PROBE_TIMEOUT")
+    if raw is None:
+        raw = (config or {}).get("LAST30DAYS_DOCTOR_PROBE_TIMEOUT")
+    if raw is None or raw == "":
+        return DEFAULT_PROBE_TIMEOUT_SECONDS
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_PROBE_TIMEOUT_SECONDS
+
+
+def _probeable_sources() -> tuple:
+    """Sources doctor will live-probe: free HTTP endpoints + keyless CLIs.
+
+    github is HTTP-probed (its REST tier works without gh), so it is excluded
+    from the CLI-probe path even though gh is in CLI_DEPENDENCIES.
+    """
+    cli_only = [s for s in CLI_DEPENDENCIES if s not in _HTTP_PROBE_URLS]
+    return tuple(dict.fromkeys(list(_HTTP_PROBE_URLS) + cli_only))
+
+
+def _http_ok(url: str, timeout: float) -> tuple:
+    """Reachability check: a 4xx still means the endpoint responded; 5xx or a
+    connection/timeout error means it did not."""
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "last30days-doctor"}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = getattr(resp, "status", 200) or 200
+        return code < 500, f"HTTP {code}"
+    except urllib.error.HTTPError as exc:
+        return exc.code < 500, f"HTTP {exc.code}"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _probe_source(name: str, config: Dict[str, Any], timeout: float) -> Optional[Dict[str, Any]]:
+    url = _HTTP_PROBE_URLS.get(name)
+    if url:
+        ok, detail = _http_ok(url, timeout)
+        return {"ok": ok, "detail": detail, "probed": True}
+    cli = CLI_DEPENDENCIES.get(name)
+    if cli:
+        try:
+            probe = health.probe_dependency(cli)
+        except Exception as exc:
+            return {"ok": False, "detail": f"{type(exc).__name__}: {exc}", "probed": True}
+        return {"ok": bool(probe.ok), "detail": probe.detail, "probed": True}
+    return None
+
+
+def _probe_sources(config: Dict[str, Any], timeout: int) -> Dict[str, Dict[str, Any]]:
+    """Probe the probeable sources concurrently, each capped at ``timeout``.
+
+    A source that blows its deadline resolves to a probe-failure for that
+    source only (never a hung command); other probes are unaffected.
+    """
+    names = _probeable_sources()
+    results: Dict[str, Dict[str, Any]] = {}
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(8, len(names) or 1)
+    ) as pool:
+        futures = {
+            name: pool.submit(_probe_source, name, config, timeout) for name in names
+        }
+        for name, fut in futures.items():
+            try:
+                res = fut.result(timeout=timeout + 1)
+            except concurrent.futures.TimeoutError:
+                res = {"ok": False, "detail": "probe exceeded deadline", "probed": True}
+            except Exception as exc:
+                res = {
+                    "ok": False,
+                    "detail": f"{type(exc).__name__}: {exc}",
+                    "probed": True,
+                }
+            if res is not None:
+                results[name] = res
+    return results
+
+
+def _apply_probe(report: Dict[str, Any], probe_results: Dict[str, Dict[str, Any]]) -> None:
+    """Attach probe results and re-derive audit_state for probed sources."""
+    for name, res in probe_results.items():
+        record = (report.get("sources") or {}).get(name)
+        if record is None:
+            continue
+        record["probe"] = res
+        record["audit_state"] = audit_state(
+            name, record, record.get("run_outcome"), res
+        )
+
+
 def run(
     config: Dict[str, Any],
     *,
@@ -1511,6 +1633,28 @@ def run(
     report = build_report(config)
     report["generated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     report["from_cache"] = False
+
+    # U5: verify WORKING with a bounded live probe when asked (--probe) or when
+    # there is no fresh run to learn from ("if no recent runs, run a live
+    # test"). Scoped to free/CLI sources; credit-gated sources stay UNVERIFIED.
+    fresh_run = bool((report.get("run_evidence") or {}).get("fresh"))
+    if probe or not fresh_run:
+        timeout = probe_timeout_seconds(config)
+        probeable = _probeable_sources()
+        sys.stderr.write(
+            f"[last30days] doctor live probe: checking {len(probeable)} free/CLI "
+            f"sources ({timeout}s each; no credit-gated sources - x/tiktok/"
+            f"instagram/threads stay unverified)\n"
+        )
+        sys.stderr.flush()
+        try:
+            probe_results = _probe_sources(config, timeout)
+        except Exception:
+            probe_results = {}
+        _apply_probe(report, probe_results)
+        report["mode"] = "probe"
+        report["probe"] = {"ran": True, "timeout": timeout, "sources": list(probeable)}
+
     _write_cache(report, config)
     _emit(report)
     return 0

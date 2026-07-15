@@ -117,6 +117,9 @@ class _Hermetic:
             # Hermetic run-evidence: never read the user's real last-report.json.
             # Tests that inject run evidence override this with a temp file.
             mock.patch("lib.doctor._last_report_path", return_value=None),
+            # Hermetic live probe: never make a real network call. Tests that
+            # exercise probing override this with canned results.
+            mock.patch("lib.doctor._probe_sources", return_value={}),
             # FTS5 is present on CI/dev SQLite; pin it so the library record's
             # branch is deterministic regardless of the host's SQLite build.
             mock.patch("lib.library_index.fts5_available", return_value=True),
@@ -873,6 +876,85 @@ class FourStateAudit(unittest.TestCase):
         ):
             text = doctor.render_text(doctor.build_report({}))
         self.assertIn("13 items last run", text)
+
+
+class LiveProbe(unittest.TestCase):
+    """U5: bounded live probe (--probe / no-fresh-run auto-fallback)."""
+
+    def test_probeable_excludes_credit_gated(self):
+        probeable = set(doctor._probeable_sources())
+        for gated in ("x", "tiktok", "instagram", "threads", "linkedin"):
+            self.assertNotIn(gated, probeable, gated)
+        # free HTTP + keyless CLI sources ARE probeable
+        for free in ("reddit", "hackernews", "polymarket", "github", "youtube"):
+            self.assertIn(free, probeable, free)
+
+    def test_probe_source_http_reachable(self):
+        with mock.patch("lib.doctor._http_ok", return_value=(True, "HTTP 200")):
+            res = doctor._probe_source("hackernews", {}, 5)
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["probed"])
+
+    def test_probe_source_credit_gated_returns_none(self):
+        self.assertIsNone(doctor._probe_source("tiktok", {}, 5))
+
+    def test_probe_failure_is_isolated(self):
+        def flaky(name, config, timeout):
+            if name == "reddit":
+                raise RuntimeError("boom")
+            return {"ok": True, "probed": True}
+
+        with mock.patch("lib.doctor._probe_source", flaky):
+            results = doctor._probe_sources({}, timeout=5)
+        self.assertFalse(results["reddit"]["ok"])  # isolated failure
+        self.assertIn("boom", results["reddit"]["detail"])
+        self.assertTrue(results["hackernews"]["ok"])  # others unaffected
+
+    def test_probe_deadline_never_hangs(self):
+        import time
+
+        def too_slow(name, config, timeout):
+            time.sleep(1.3)  # exceeds the timeout(0)+1s result deadline
+            return {"ok": True, "probed": True}
+
+        with mock.patch("lib.doctor._probe_source", too_slow):
+            results = doctor._probe_sources({}, timeout=0)
+        self.assertTrue(results)
+        self.assertTrue(
+            any("deadline" in r.get("detail", "") for r in results.values())
+        )
+
+    def test_probe_result_flips_unverified_to_working(self):
+        rec = {"tier": "ok", "status": "ok", "audit_state": doctor.AUDIT_UNVERIFIED}
+        report = {"sources": {"hackernews": rec}}
+        doctor._apply_probe(report, {"hackernews": {"ok": True, "probed": True}})
+        self.assertEqual(doctor.AUDIT_WORKING, rec["audit_state"])
+        self.assertTrue(rec["probe"]["ok"])
+
+    def test_auto_probe_fires_when_no_fresh_run(self):
+        canned = {"hackernews": {"ok": True, "detail": "HTTP 200", "probed": True}}
+        with _Hermetic(), mock.patch(
+            "lib.doctor._probe_sources", return_value=canned
+        ) as probed:
+            out = io.StringIO()
+            err = io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = doctor.run({})
+        self.assertEqual(0, rc)
+        probed.assert_called()  # auto-fired: no fresh run
+        self.assertIn("live probe", err.getvalue())
+
+    def test_no_auto_probe_when_fresh_run(self):
+        tmp = tempfile.mkdtemp()
+        path = _write_last_report(
+            tmp, source_status={"reddit": {"state": "ok", "items_returned": 5}}
+        )
+        with _Hermetic(), mock.patch(
+            "lib.doctor._last_report_path", return_value=path
+        ), mock.patch("lib.doctor._probe_sources") as probed:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                doctor.run({})
+        probed.assert_not_called()  # fresh run -> overlay, no probe
 
 
 class Postmortem(unittest.TestCase):
